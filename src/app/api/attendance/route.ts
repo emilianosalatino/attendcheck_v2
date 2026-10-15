@@ -14,41 +14,81 @@ import {
  * Body (lo que el cliente envia):
  *   {
  *     token: string         // token de la sesion (del QR)
- *     studentId: string     // matricula o numero de control
+ *     studentId: string     // matricula AASSFNNNN (la F mayuscula se fuerza)
+ *     studentGivenNames: string       // nombre(s), obligatorio, min 2 chars
+ *     studentPaternalSurname: string // apellido paterno, obligatorio, min 2 chars
+ *     studentMaternalSurname?: string // apellido materno, opcional
  *   }
  *
  * Lo que el servidor calcula (NO confia en el cliente):
- *   - deviceFp:   SHA-256 de (User-Agent + Accept-Language + sec-ch-ua + IP)
+ *   - deviceFp: SHA-256 de (User-Agent + Accept-Language + sec-ch-ua + IP)
  *   - trackingUuid: UUID de la cookie HTTP-only firmada (asist_track)
+ *
+ * Validacion de matricula:
+ *   Formato: AASSFNNNN
+ *   - AA = ano de ingreso (08-99)
+ *   - SS = semestre de incorporacion (2 digitos)
+ *   - F = letra "F" (aceptamos f minuscula, la convertimos a mayuscula)
+ *   - NNNN = consecutivo de 4 digitos
+ *   Ej valido: 1701F0021
  *
  * Anti-trampa (varias capas):
  *   1. La sesion debe existir y estar dentro de su ventana de tiempo.
- *   2. La misma matricula no puede registrar dos veces la misma sesion (unique constraint).
+ *   2. La misma matricula no puede registrar dos veces (unique constraint).
  *   3. Si el mismo deviceFp (server-side) ya registro con OTRA matricula -> flag.
  *   4. Si el mismo trackingUuid (cookie firmada) ya registro con otra matricula -> flag.
  *   5. Si la ventana ya cerro -> rechazar con error.
- *
- * IMPORTANTE: el cliente ya NO envia deviceFp. El servidor lo calcula.
- * Si el cliente intenta mandar un deviceFp en el body, se IGNORA.
  */
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const token = String(body.token || '').trim()
-  const studentId = String(body.studentId || '').trim().toUpperCase()
+  // Matricula: forzar F mayuscula
+  let studentId = String(body.studentId || '').trim().toUpperCase()
+  // Si tiene f minuscula en posicion 4, convertirla a mayuscula
+  studentId = studentId.replace(/^([0-9]{4})f([0-9]{4})$/, '$1F$2')
+  // Normalizar: quitar espacios/guiones por si el alumno los puso
+  studentId = studentId.replace(/[\s-]/g, '')
 
-  if (!token || !studentId) {
+  // Validar formato de matricula AASSFNNNN
+  const MATRICULA_RE = /^(0[8-9]|[1-9][0-9])[0-9]{2}F[0-9]{4}$/
+  if (!MATRICULA_RE.test(studentId)) {
     return NextResponse.json(
-      { error: 'Faltan datos (token o matricula)' },
+      {
+        error:
+          'Matricula con formato invalido. Debe ser AASSFNNNN (ej: 1701F0021). AA = 08-99, SS = semestre, F = letra F, NNNN = consecutivo.',
+      },
       { status: 400 }
     )
   }
-  // Validacion de formato de matricula: 2-15 alfanumerico
-  if (!/^[A-Z0-9]{2,15}$/.test(studentId)) {
+
+  // Nombre(s) - obligatorio, min 2 chars
+  const studentGivenNames = String(body.studentGivenNames || '').trim()
+    .slice(0, 100)
+  const studentPaternalSurname = String(body.studentPaternalSurname || '')
+    .trim()
+    .slice(0, 100)
+  const studentMaternalSurname = String(body.studentMaternalSurname || '')
+    .trim()
+    .slice(0, 100)
+
+  if (studentGivenNames.length < 2) {
     return NextResponse.json(
-      { error: 'Matricula con formato invalido (solo letras y numeros, 2-15 caracteres)' },
+      { error: 'Tu(s) nombre(s) son obligatorios (minimo 2 caracteres).' },
       { status: 400 }
     )
   }
+  if (studentPaternalSurname.length < 2) {
+    return NextResponse.json(
+      { error: 'Apellido paterno es obligatorio (minimo 2 caracteres).' },
+      { status: 400 }
+    )
+  }
+  // Sanitizar: quitar HTML tags por seguridad
+  const sanitize = (s: string) => s.replace(/<[^>]*>/g, '').trim()
+  const cleanGiven = sanitize(studentGivenNames)
+  const cleanPaternal = sanitize(studentPaternalSurname)
+  const cleanMaternal =
+    studentMaternalSurname.length > 0 ? sanitize(studentMaternalSurname) : null
 
   const session = await db.classSession.findUnique({
     where: { token },
@@ -84,7 +124,6 @@ export async function POST(req: NextRequest) {
   const deviceFp = computeServerFingerprint(req)
 
   // Creamos o leemos la cookie firmada HTTP-only.
-  // Importante: creamos la response primero para poder setear la cookie.
   const response = NextResponse.json({}, { status: 200 })
   const trackingUuid = getOrCreateTrackingUuid(req, response)
 
@@ -145,6 +184,9 @@ export async function POST(req: NextRequest) {
     data: {
       sessionId: session.id,
       studentId,
+      studentGivenNames: cleanGiven,
+      studentPaternalSurname: cleanPaternal,
+      studentMaternalSurname: cleanMaternal,
       deviceFp,
       ip,
       userAgent: uaWithUuid,
@@ -160,6 +202,7 @@ export async function POST(req: NextRequest) {
       attendance: {
         id: attendance.id,
         studentId: attendance.studentId,
+        studentName: `${cleanGiven} ${cleanPaternal}${cleanMaternal ? ' ' + cleanMaternal : ''}`,
         submittedAt: attendance.submittedAt,
         flagged: attendance.flagged,
         flagReason: attendance.flagReason,
