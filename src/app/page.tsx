@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo, Suspense } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { QRCodeSVG } from 'qrcode.react'
 import {
@@ -1071,9 +1071,12 @@ function SessionStatsDialog({
     XLSX.utils.book_append_sheet(wb, ws1, 'Resumen')
 
     // Hoja 2: lista detallada
+    // Incluye columna "Sesion" al inicio para que sepas de que sesion es cada fila
+    // (util cuando combinas exports de varias sesiones en un solo Excel)
     const rows = [
-      ['Matricula', 'Nombre(s)', 'Apellido paterno', 'Apellido materno', 'Nombre completo', 'Hora', 'Sospechoso', 'Razon', 'IP'],
+      ['Sesion', 'Matricula', 'Nombre(s)', 'Apellido paterno', 'Apellido materno', 'Nombre completo', 'Hora', 'Sospechoso', 'Razon', 'IP'],
       ...data.attendances.map((a: any) => [
+        data.session.name,
         a.studentId,
         a.studentGivenNames,
         a.studentPaternalSurname,
@@ -1089,6 +1092,7 @@ function SessionStatsDialog({
     ]
     const ws2 = XLSX.utils.aoa_to_sheet(rows)
     ws2['!cols'] = [
+      { wch: 30 }, // Sesion
       { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 35 },
       { wch: 20 }, { wch: 11 }, { wch: 50 }, { wch: 18 },
     ]
@@ -1292,9 +1296,13 @@ function SubjectStatsDialog({
     XLSX.utils.book_append_sheet(wb, ws2, 'Sesiones')
 
     // Hoja 3: alumnos
+    // Incluye columna "Materia" al inicio para identificar a que materia pertenecen
+    // (los datos son agregados por materia, asi que la columna es la misma para todas las filas
+    // pero es util cuando combinas exports de varias materias)
     const stuRows = [
-      ['Matricula', 'Nombre(s)', 'Apellido paterno', 'Apellido materno', 'Nombre completo', 'Asistencias', 'Total sesiones', '% Asistencia', 'Sospechosas', 'Primera vez visto', 'Ultima vez visto'],
+      ['Materia', 'Matricula', 'Nombre(s)', 'Apellido paterno', 'Apellido materno', 'Nombre completo', 'Asistencias', 'Total sesiones', '% Asistencia', 'Sospechosas', 'Primera vez visto', 'Ultima vez visto'],
       ...data.students.map((s: any) => [
+        data.subject.name,
         s.studentId,
         s.studentGivenNames,
         s.studentPaternalSurname,
@@ -1312,6 +1320,7 @@ function SubjectStatsDialog({
     ]
     const ws3 = XLSX.utils.aoa_to_sheet(stuRows)
     ws3['!cols'] = [
+      { wch: 30 }, // Materia
       { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 35 },
       { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 20 },
     ]
@@ -1566,9 +1575,13 @@ function AttendanceDialog({
 
   const exportCSV = () => {
     const rows = [
-      ['matricula', 'fecha_hora', 'ip', 'device_fp', 'sospechoso', 'razon'],
+      ['matricula', 'nombres', 'apellido_paterno', 'apellido_materno', 'nombre_completo', 'fecha_hora', 'ip', 'device_fp', 'sospechoso', 'razon'],
       ...list.map((a) => [
         a.studentId,
+        a.studentGivenNames,
+        a.studentPaternalSurname,
+        a.studentMaternalSurname ?? '',
+        fullName(a),
         new Date(a.submittedAt).toISOString(),
         a.ip ?? '',
         a.deviceFp,
@@ -1762,31 +1775,50 @@ function StudentAttendanceForm({ token }: { token: string }) {
     return cleaned
   }
 
-  // Cargar info de la sesion
-  const loadSession = useCallback(async () => {
-    setLoadingS(true)
+  // Ref para acceder al valor actual de session dentro de loadSession
+  // sin incluirlo como dependency (lo que causaria loop infinito).
+  const sessionRef = useRef<StudentSessionInfo | null>(null)
+  useEffect(() => {
+    sessionRef.current = session
+  }, [session])
+
+  // Cargar info de la sesion.
+  // El flag `silent` evita mostrar el spinner en refrescos periodicos
+  // (solo lo mostramos en la carga inicial). Sin esto, el formulario se
+  // desmonta y el cursor salta al campo con autoFocus cada 30s.
+  const loadSession = useCallback(async (silent = false) => {
+    if (!silent) setLoadingS(true)
     try {
       const res = await fetch(`/api/sessions/${token}`)
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        setResult({ kind: 'error', message: err.error || 'Sesion no encontrada' })
-        setSession(null)
+        // Solo sobreescribir el result con error si la sesion realmente se cerro
+        // o no existe. No queremos perder lo que el alumno ya escribio en el form
+        // por un blip de red transitorio.
+        if (res.status === 404) {
+          setResult({ kind: 'error', message: err.error || 'Sesion no encontrada' })
+          setSession(null)
+        }
       } else {
         const data = await res.json()
         setSession(data.session)
         setResult(null)
       }
     } catch {
-      setResult({ kind: 'error', message: 'No se pudo conectar con el servidor' })
-      setSession(null)
+      // Error de red transitorio: no romper el form del alumno.
+      // Solo mostrar error si nunca hemos cargado.
+      if (!sessionRef.current) {
+        setResult({ kind: 'error', message: 'No se pudo conectar con el servidor' })
+      }
     } finally {
-      setLoadingS(false)
+      if (!silent) setLoadingS(false)
     }
   }, [token])
 
   useEffect(() => {
-    loadSession()
-    const id = setInterval(loadSession, 10_000) // refresca cada 10s
+    loadSession(false) // inicial: muestra spinner
+    // Refresco cada 30s en modo silencioso (no monta/desmonta el form)
+    const id = setInterval(() => loadSession(true), 30_000)
     return () => clearInterval(id)
   }, [loadSession])
 
