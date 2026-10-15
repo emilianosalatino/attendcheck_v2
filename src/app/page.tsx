@@ -1597,7 +1597,8 @@ function AttendanceDialog({
           r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')
         )
         .join('\n')
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      // BOM UTF-8 (\uFEFF) para que Excel reconozca acentos y ñ correctamente
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       // IMPORTANTE: el anchor DEBE estar en el DOM para que click() dispare la descarga
       // en algunos navegadores (Safari, algunas versiones de Chrome).
