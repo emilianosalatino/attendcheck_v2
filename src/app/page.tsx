@@ -1574,33 +1574,45 @@ function AttendanceDialog({
   }
 
   const exportCSV = () => {
-    const rows = [
-      ['matricula', 'nombres', 'apellido_paterno', 'apellido_materno', 'nombre_completo', 'fecha_hora', 'ip', 'device_fp', 'sospechoso', 'razon'],
-      ...list.map((a) => [
-        a.studentId,
-        a.studentGivenNames,
-        a.studentPaternalSurname,
-        a.studentMaternalSurname ?? '',
-        fullName(a),
-        new Date(a.submittedAt).toISOString(),
-        a.ip ?? '',
-        a.deviceFp,
-        a.flagged ? 'SI' : 'NO',
-        a.flagReason ?? '',
-      ]),
-    ]
-    const csv = rows
-      .map((r) =>
-        r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')
-      )
-      .join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `asistencia_${session.name.replace(/\s+/g, '_')}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    try {
+      const rows = [
+        ['matricula', 'nombres', 'apellido_paterno', 'apellido_materno', 'nombre_completo', 'fecha_hora', 'ip', 'device_fp', 'sospechoso', 'razon'],
+        ...list.map((a) => [
+          a.studentId,
+          a.studentGivenNames,
+          a.studentPaternalSurname,
+          a.studentMaternalSurname ?? '',
+          fullName(a),
+          new Date(a.submittedAt).toISOString(),
+          a.ip ?? '',
+          a.deviceFp,
+          a.flagged ? 'SI' : 'NO',
+          a.flagReason ?? '',
+        ]),
+      ]
+      const csv = rows
+        .map((r) =>
+          r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')
+        )
+        .join('\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      // IMPORTANTE: el anchor DEBE estar en el DOM para que click() dispare la descarga
+      // en algunos navegadores (Safari, algunas versiones de Chrome).
+      // Si no está en el DOM, click() es un no-op silencioso.
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `asistencia_${session.name.replace(/\s+/g, '_')}.csv`
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      // Limpieza del blob URL después de un pequeño delay (para que el navegador procese el click)
+      setTimeout(() => URL.revokeObjectURL(url), 100)
+      toast.success('CSV descargado')
+    } catch (e) {
+      toast.error('No se pudo generar el CSV: ' + (e as Error).message)
+    }
   }
 
   return (
