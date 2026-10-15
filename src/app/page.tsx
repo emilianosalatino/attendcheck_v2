@@ -1739,6 +1739,10 @@ function AttendanceDialog({
 function StudentAttendanceForm({ token }: { token: string }) {
   const [session, setSession] = useState<StudentSessionInfo | null>(null)
   const [loadingS, setLoadingS] = useState(true)
+  // Campos de nombre y matricula (Fase 1)
+  const [givenNames, setGivenNames] = useState('')
+  const [paternalSurname, setPaternalSurname] = useState('')
+  const [maternalSurname, setMaternalSurname] = useState('')
   const [studentId, setStudentId] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<
@@ -1746,6 +1750,17 @@ function StudentAttendanceForm({ token }: { token: string }) {
     | { kind: 'error'; message: string }
     | null
   >(null)
+
+  // Regex visual para validar matricula AASSFNNNN en cliente
+  const MATRICULA_RE = /^(0[8-9]|[1-9][0-9])[0-9]{2}[fF][0-9]{4}$/
+  const isMatriculaValid = MATRICULA_RE.test(studentId)
+
+  // Normaliza la matricula: quita espacios/guiones, convierte f min a F mayus
+  const normalizeMatricula = (s: string): string => {
+    let cleaned = s.toUpperCase().replace(/[\s-]/g, '')
+    cleaned = cleaned.replace(/^([0-9]{4})f([0-9]{4})$/, '$1F$2')
+    return cleaned
+  }
 
   // Cargar info de la sesion
   const loadSession = useCallback(async () => {
@@ -1776,8 +1791,16 @@ function StudentAttendanceForm({ token }: { token: string }) {
   }, [loadSession])
 
   const submit = async () => {
-    if (!studentId.trim()) {
-      toast.error('Escribe tu matricula o numero de control')
+    if (!givenNames.trim() || givenNames.trim().length < 2) {
+      toast.error('Escribe tu(s) nombre(s) - minimo 2 caracteres')
+      return
+    }
+    if (!paternalSurname.trim() || paternalSurname.trim().length < 2) {
+      toast.error('Escribe tu apellido paterno - minimo 2 caracteres')
+      return
+    }
+    if (!studentId.trim() || !isMatriculaValid) {
+      toast.error('Matricula con formato invalido. Debe ser AASSFNNNN (ej: 1701F0021)')
       return
     }
     setSubmitting(true)
@@ -1792,7 +1815,10 @@ function StudentAttendanceForm({ token }: { token: string }) {
         credentials: 'include', // para que el navegador envie/reciba cookies
         body: JSON.stringify({
           token,
-          studentId: studentId.trim().toUpperCase(),
+          studentId: normalizeMatricula(studentId),
+          studentGivenNames: givenNames.trim(),
+          studentPaternalSurname: paternalSurname.trim(),
+          studentMaternalSurname: maternalSurname.trim(),
         }),
       })
       const data = await res.json()
@@ -1803,12 +1829,16 @@ function StudentAttendanceForm({ token }: { token: string }) {
         })
         return
       }
+      const full = data.attendance?.studentName || data.attendance?.studentId
       setResult({
         kind: 'ok',
         message: data.attendance?.flagged
-          ? `Asistencia registrada para ${data.attendance.studentId}. AVISO: tu registro quedo marcado como sospechoso: ${data.attendance.flagReason}. Contacta a tu maestro.`
-          : `Asistencia registrada para ${data.attendance.studentId}. Gracias!`,
+          ? `Asistencia registrada para ${full}. AVISO: tu registro quedo marcado como sospechoso: ${data.attendance.flagReason}. Contacta a tu maestro.`
+          : `Asistencia registrada para ${full}. Gracias!`,
       })
+      setGivenNames('')
+      setPaternalSurname('')
+      setMaternalSurname('')
       setStudentId('')
     } catch {
       setResult({ kind: 'error', message: 'Error de red al registrar' })
@@ -1882,23 +1912,106 @@ function StudentAttendanceForm({ token }: { token: string }) {
 
           {session.isWindowOpen ? (
             <>
+              {/* Nombre(s) - obligatorio */}
               <div className="grid gap-2">
-                <Label htmlFor="mat">Matricula o numero de control</Label>
+                <Label htmlFor="given">
+                  Nombre(s) <span className="text-red-600">*</span>
+                </Label>
                 <Input
-                  id="mat"
-                  placeholder="Ej. 20180564"
-                  value={studentId}
-                  autoCapitalize="characters"
-                  onChange={(e) => setStudentId(e.target.value)}
+                  id="given"
+                  placeholder="Ej. Juan Carlos"
+                  value={givenNames}
+                  autoCapitalize="words"
+                  onChange={(e) => setGivenNames(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') submit()
                   }}
                   autoFocus
                 />
               </div>
+
+              {/* Apellido paterno (obligatorio) + Apellido materno (opcional) */}
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label htmlFor="pat">
+                    Apellido paterno <span className="text-red-600">*</span>
+                  </Label>
+                  <Input
+                    id="pat"
+                    placeholder="Ej. Perez"
+                    value={paternalSurname}
+                    autoCapitalize="words"
+                    onChange={(e) => setPaternalSurname(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submit()
+                    }}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="mat" className="flex items-center gap-1">
+                    Apellido materno{' '}
+                    <span className="text-[10px] text-zinc-400 font-normal">
+                      (opcional)
+                    </span>
+                  </Label>
+                  <Input
+                    id="mat"
+                    placeholder="Ej. Lopez"
+                    value={maternalSurname}
+                    autoCapitalize="words"
+                    onChange={(e) => setMaternalSurname(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submit()
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Matricula con regex visual */}
+              <div className="grid gap-2">
+                <Label htmlFor="matricula" className="flex items-center gap-1">
+                  Matricula (numero de control){' '}
+                  <span className="text-red-600">*</span>
+                </Label>
+                <Input
+                  id="matricula"
+                  placeholder="Ej. 1701F0021"
+                  value={studentId}
+                  autoCapitalize="characters"
+                  className={`font-mono ${
+                    studentId.length > 0 && !isMatriculaValid
+                      ? 'border-red-400 focus-visible:outline-red-200'
+                      : isMatriculaValid
+                        ? 'border-emerald-400'
+                        : ''
+                  }`}
+                  onChange={(e) => setStudentId(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submit()
+                  }}
+                  maxLength={9}
+                />
+                <p className="text-[10px] text-zinc-500">
+                  Formato: AASSFNNNN — AA = ano (08-99), SS = semestre, F =
+                  letra F, NNNN = consecutivo.
+                  {studentId.length > 0 && !isMatriculaValid && (
+                    <span className="text-red-600 ml-1">Formato invalido</span>
+                  )}
+                  {isMatriculaValid && (
+                    <span className="text-emerald-700 ml-1">✓ Formato valido</span>
+                  )}
+                </p>
+              </div>
               <Button
                 onClick={submit}
-                disabled={submitting}
+                disabled={
+                  submitting ||
+                  !givenNames.trim() ||
+                  givenNames.trim().length < 2 ||
+                  !paternalSurname.trim() ||
+                  paternalSurname.trim().length < 2 ||
+                  !isMatriculaValid
+                }
                 className="bg-emerald-600 hover:bg-emerald-700 text-white w-full"
               >
                 {submitting ? (
