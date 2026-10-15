@@ -1582,7 +1582,9 @@ function AttendanceDialog({
           a.studentGivenNames,
           a.studentPaternalSurname,
           a.studentMaternalSurname ?? '',
-          fullName(a),
+          [a.studentGivenNames, a.studentPaternalSurname, a.studentMaternalSurname]
+            .filter(Boolean)
+            .join(' '),
           new Date(a.submittedAt).toISOString(),
           a.ip ?? '',
           a.deviceFp,
